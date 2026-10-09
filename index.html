@@ -431,6 +431,28 @@ body.is-dragging{user-select:none;-webkit-user-select:none;cursor:grabbing}
   .compare-item:hover{transform:none;box-shadow:none}
   .compare-item:hover::after{content:none}
 }
+
+/* ===== v5: selection type, dorm chips, sections ===== */
+.sel-chip{display:inline-block;border-radius:8px;padding:0 8px;font-size:.72rem;font-weight:700;line-height:1.7;white-space:nowrap;margin-left:4px}
+.sel-chip.s-k{background:#e2e8f0;color:#2d3748}
+.sel-chip.s-n{background:#c6f6d5;color:#22543d}
+.sel-chip.s-q{background:#e9d8fd;color:#44337a}
+.sel-chip.s-p{background:#feebc8;color:#7b341e}
+.sel-chip.s-o{background:#edf2f7;color:#4a5568}
+.dchip{display:inline-block;border-radius:8px;padding:0 8px;font-size:.72rem;font-weight:600;line-height:1.7;margin:0 0 3px 4px;white-space:nowrap}
+.dchip.d-bad{background:#fed7d7;color:#9b2c2c}
+.dchip.d-warn{background:#feebc8;color:#9c4221}
+.dchip.d-ok{background:#c6f6d5;color:#22543d}
+.dchip.d-info{background:#e2e8f0;color:#4a5568}
+.bank-table tr.sleep-amber{background:#fffaf0}
+.bank-table td .sub{font-size:.7rem;color:var(--muted);margin-top:2px}
+.bank-table .nat{color:#2c5282;margin-bottom:2px}
+.lk-chips{margin:6px 0 2px}
+.item-row .sel-chip,.result-item .sel-chip,.compare-item .sel-chip{margin-bottom:2px}
+@media (max-width:700px){
+  .bank-table td.c-sel{display:none}
+  .bank-table td.meta-cell .sel-chip{margin:0}
+}
 </style>
 </head>
 <body>
@@ -513,8 +535,13 @@ body.is-dragging{user-select:none;-webkit-user-select:none;cursor:grabbing}
         <div class="field"><label>نحوه پذیرش</label><div class="msel" id="f-admission" data-key="admission"></div></div>
         <div class="field"><label>دوره تحصیلی</label><div class="msel" id="f-degree" data-key="degree"></div></div>
         <div class="field"><label>جنس پذیرش</label><div class="msel" id="f-gender" data-key="gender"></div></div>
+        <div class="field"><label>نوع گزینش <span class="muted">(روزانه)</span></label><div class="msel" id="f-selection" data-key="selection"></div></div>
+        <div class="field"><label>وضعیت خوابگاه <span class="muted">(چندتایی)</span></label><div class="msel" id="f-dorm" data-key="dorm"></div></div>
+        <div class="field"><label>شرایط خاص <span class="muted">(از توضیحات)</span></label><div class="msel" id="f-extra" data-key="extra"></div></div>
+        <div class="field"><label>بخش دفترچه</label><div class="msel" id="f-section" data-key="section"></div></div>
+        <div class="field"><label>استان بومی</label><div class="msel" id="f-nativeProvince" data-key="nativeProvince"></div></div>
         <div class="field">
-          <label>وضعیت خوابگاه</label>
+          <label>مشکل خوابگاه</label>
           <select id="f-sleep">
             <option value="">همه</option>
             <option value="with_problem">⚠ فقط دارای مشکل خوابگاه</option>
@@ -775,7 +802,8 @@ let bankPage = 1;
 let bankSelected = new Set();
 let bankFilters = {
   search: '', province: [], university: [], major: [],
-  admission: [], degree: [], gender: [], sleep: '', listed: ''
+  admission: [], degree: [], gender: [], dorm: [], extra: [], selection: [], section: [], nativeProvince: [],
+  sleep: '', listed: ''
 };
 let listedCodes = new Set();
 let bankMajorContains = false;
@@ -812,13 +840,122 @@ function normalizeText(s){
   t = t.replace(/\s+/g, ' ').trim();
   return t;
 }
-function hasSleepProblem(notes){
-  if (!notes) return false;
-  const n = normalizeText(notes);
-  return n.includes('فاقد خوابگاه') ||
-         n.includes('عدم تعهد در واگذاری خوابگاه') ||
-         n.includes('عدم تعهد واگذاری خوابگاه');
+/* ---------- تحلیل ستون «توضیحات»: وضعیت خوابگاه + شرایط خاص ---------- */
+const DORM_TAGS = {
+  none:      { label: 'فاقد خوابگاه',                  cls: 'bad' },
+  nocommit:  { label: 'عدم تعهد در واگذاری',           cls: 'bad' },
+  limited:   { label: 'محدودیت (ارائه/مدت/فاصله/ظرفیت)', cls: 'warn' },
+  rented:    { label: 'استیجاری',                      cls: 'warn' },
+  selfrun:   { label: 'خودگردان',                      cls: 'warn' },
+  intro:     { label: 'معرفی به خوابگاه',               cls: 'warn' },
+  owned:     { label: 'ملکی (تضمین‌شده)',               cls: 'ok' },
+  married:   { label: 'خوابگاه متأهلی',                 cls: 'info' },
+  nomarried: { label: 'فاقد خوابگاه متأهلی',            cls: 'info' },
+  f:         { label: 'ویژه‌ی خواهران',                 cls: 'info' },
+  m:         { label: 'ویژه‌ی برادران',                 cls: 'info' },
+  other:     { label: 'سایر شرایط خوابگاه',             cls: 'info' }
+};
+const DORM_ORDER = ['none', 'nocommit', 'limited', 'rented', 'selfrun', 'intro', 'owned', 'married', 'nomarried', 'f', 'm', 'other'];
+const EXTRA_TAGS = {
+  interview: { label: 'دارای مصاحبه' },
+  bourse:    { label: 'بورس / تعهد کار' },
+  free:      { label: 'تحصیل رایگان' },
+  transfer:  { label: 'ممنوعیت مهمانی و انتقال' },
+  service:   { label: 'تعهد خدمت' },
+  attach:    { label: 'شرایط در «پیوست‌ها»' }
+};
+const EXTRA_ORDER = ['interview', 'bourse', 'free', 'transfer', 'service', 'attach'];
+
+function splitNotes(text){
+  const segs = []; let depth = 0, cur = '';
+  for (let i = 0; i < text.length; i++){
+    const ch = text[i];
+    if (ch === '(') depth++; else if (ch === ')') depth = Math.max(0, depth - 1);
+    if (depth === 0 && text.substr(i, 3) === ' - '){ segs.push(cur); cur = ''; i += 2; continue; }
+    cur += ch;
+  }
+  segs.push(cur);
+  return segs.map(x => x.trim()).filter(Boolean);
 }
+const _classCache = new Map();
+function classifyNotes(notes){
+  const empty = { dorm: [], extra: [], sev: '', problem: false };
+  if (!notes) return empty;
+  if (_classCache.has(notes)) return _classCache.get(notes);
+  const dormSet = new Set(), extraSet = new Set(); let rank = 0;
+  for (const seg of splitNotes(notes)){
+    const t = normalizeText(seg).replace(/[\u200c\u200b]/g, '');
+    if (/مصاحبه/.test(t)) extraSet.add('interview');
+    if (/بورس/.test(t)) extraSet.add('bourse');
+    if (/تحصیل رایگان/.test(t)) extraSet.add('free');
+    if (/ممنوعیت مهمانی|ممنوعیت انتقال|مهمانی و انتقال/.test(t)) extraSet.add('transfer');
+    if (/تعهد خدمت/.test(t)) extraSet.add('service');
+    if (/پیوست/.test(t)) extraSet.add('attach');
+    if (!/خوابگاه/.test(t)) continue;
+    const f = /خواهران|دختران|بانوان/.test(t), m = /برادران|پسران|آقایان/.test(t);
+    const scopeAll = !(f || m);
+    const tags = [];
+    if (/متاهلی|متأهلی/.test(t)) tags.push(/فاقد/.test(t) ? 'nomarried' : 'married');
+    else {
+      if (/فاقد/.test(t)) tags.push('none');
+      if (/عدم تعهد/.test(t)) tags.push('nocommit');
+      if (/محدودیت|محدود|حداکثر|کیلومتر/.test(t)) tags.push('limited');
+      if (/استیجاری/.test(t)) tags.push('rented');
+      if (/خودگردان/.test(t)) tags.push('selfrun');
+      if (/معرفی/.test(t)) tags.push('intro');
+      if (/ملکی/.test(t)) tags.push('owned');
+      if (!tags.length && !(f !== m)) tags.push('other');     // «خوابگاه ویژه خواهران» فقط تگ جنس می‌گیرد
+    }
+    if (f && !m) dormSet.add('f');
+    if (m && !f) dormSet.add('m');
+    for (const tg of tags){
+      dormSet.add(tg);
+      if (tg === 'none' || tg === 'nocommit') rank = Math.max(rank, scopeAll ? 3 : 2);
+      else if (tg === 'limited' || tg === 'rented' || tg === 'selfrun' || tg === 'intro') rank = Math.max(rank, 2);
+      else if (tg === 'owned') rank = Math.max(rank, 1);
+    }
+  }
+  const res = {
+    dorm: DORM_ORDER.filter(x => dormSet.has(x)),
+    extra: EXTRA_ORDER.filter(x => extraSet.has(x)),
+    sev: rank >= 3 ? 'bad' : rank === 2 ? 'warn' : rank === 1 ? 'ok' : '',
+    problem: rank >= 2
+  };
+  _classCache.set(notes, res);
+  return res;
+}
+/* «مشکل خوابگاه» = فاقد / عدم تعهد / محدودیت / استیجاری / خودگردان / معرفی. خوابگاه ملکی مشکل نیست. */
+function hasSleepProblem(notes){ return classifyNotes(notes).problem; }
+
+const SECTION_MAIN = 'وزارت علوم، تحقیقات و فناوری';
+const SECTION_SHORT = {
+  'وزارت علوم، تحقیقات و فناوری': 'وزارت علوم',
+  'دانشگاه پیام‌نور': 'پیام‌نور',
+  'دانشگاه فرهنگیان و تربیت دبیر شهید رجایی': 'فرهنگیان',
+  'مؤسسات آموزش عالی غیردولتی-غیرانتفاعی': 'غیرانتفاعی',
+  'سهمیه مناطق محروم و بلایای طبیعی': 'سهمیه محروم/بلایا',
+  'وزارت بهداشت، درمان و آموزش پزشکی': 'بهداشت',
+  'سهمیه بومی (تعهد خدمت وزارت بهداشت)': 'بومی بهداشت'
+};
+function sectionShort(x){ return SECTION_SHORT[x] || x || ''; }
+function selChip(label){
+  if (!label) return '';
+  const c = /کشوری/.test(label) ? 'k' : /ناحیه/.test(label) ? 'n' : /قطبی/.test(label) ? 'q' : /استانی/.test(label) ? 'p' : 'o';
+  return `<span class="sel-chip s-${c}" title="نوع گزینش (دوره‌های روزانه) طبق جدول دفترچه">${escapeHtml(label)}</span>`;
+}
+function dormChipsFromTags(tags){
+  return (tags || []).map(t => `<span class="dchip d-${DORM_TAGS[t].cls}">${escapeHtml(DORM_TAGS[t].label)}</span>`).join('');
+}
+function nativeInfo(it){
+  if (it.src !== 'native') return '';
+  const parts = [];
+  if (it.nativeProvince) parts.push('مخصوص بومی ' + it.nativeProvince);
+  if (it.service) parts.push('محل خدمت: ' + it.service);
+  const rest = (it.domain || '').split('/').slice(1).join('/').trim();
+  if (rest) parts.push(rest);
+  return parts.map(escapeHtml).join(' — ');
+}
+function itemSelChip(it){ return it.bankRef && it.bankRef.selection ? selChip(it.bankRef.selection) : ''; }
 
 function codeOfItem(it){
   if (it.bankRef && it.bankRef.code) return String(it.bankRef.code);
@@ -841,7 +978,8 @@ function itemFromRecord(it){
     id: uid(), text: itemTextFromRecord(it), flag: false, createdAt: Date.now(),
     notes: it.notes || '', sleepProblem: hasSleepProblem(it.notes),
     bankRef: { code: it.code, major: it.major, university: it.university, province: it.province,
-      admission: it.admission, degree: it.degree, gender: it.gender, notes: it.notes }
+      admission: it.admission, degree: it.degree, gender: it.gender, notes: it.notes,
+      selection: it.selection || '', section: it.section || '' }
   };
 }
 /* اگر رشته‌ای وسط یک مقایسه‌ی در جریان حذف/اضافه شود، جلسه را بدون خراب شدن با لیست هماهنگ می‌کند */
@@ -962,9 +1100,14 @@ function precomputeNormalized(list){
     const searchParts = [
       it.code, it.major, it.university, it.province,
       it.admission, it.degree, it.gender, it.notes,
-      it.domain, it.service, it.nativeProvince
+      it.domain, it.service, it.nativeProvince, it.selection, it.section
     ].filter(Boolean).join(' ');
+    const cls = classifyNotes(it.notes);
     it._n = {
+      section: normalizeText(it.section),
+      selection: normalizeText(it.selection),
+      nativeProvince: normalizeText(it.nativeProvince),
+      dorm: cls.dorm, extra: cls.extra, dormSev: cls.sev,
       province: normalizeText(it.province),
       university: normalizeText(it.university),
       major: normalizeText(it.major),
@@ -973,7 +1116,7 @@ function precomputeNormalized(list){
       gender: normalizeText(it.gender),
       notes: normalizeText(it.notes),
       search: normalizeText(searchParts),
-      sleepProblem: hasSleepProblem(it.notes)
+      sleepProblem: cls.problem
     };
   }
 }
@@ -1126,6 +1269,8 @@ function detectHeaderRow(row){
     else if (/محل خدمت/.test(c) && map.service === undefined) map.service = i;
     else if (/استان بومی/.test(c) && map.nativeProvince === undefined) map.nativeProvince = i;
     else if (/^نوع ردیف$/.test(c) && map.src === undefined) map.src = i;
+    else if (/نوع گزینش/.test(c) && map.selection === undefined) map.selection = i;
+    else if (/^بخش/.test(c) && map.section === undefined) map.section = i;
   }
   if (map.code !== undefined && map.major !== undefined && hits >= 2) return map;
   return null;
@@ -1196,7 +1341,9 @@ function parseWorkbookRows(rows, forceMap){
       capMale: get(columnMap.capMale),
       blockRaw: currentBlock.raw || '',
       star: columnMap.star !== undefined ? /^(بله|true|1|yes|\*)/i.test(get(columnMap.star)) : false,
-      page: get(columnMap.page)
+      page: get(columnMap.page),
+      section: get(columnMap.section),
+      selection: get(columnMap.selection)
     };
     if (columnMap.src !== undefined && /بومی|native/i.test(get(columnMap.src))){
       item.src = 'native';
@@ -1404,10 +1551,13 @@ async function refreshBankFromDB(){
 function computeUniqueValues(){
   const maps = {
     province: new Map(), university: new Map(), major: new Map(),
-    admission: new Map(), degree: new Map(), gender: new Map()
+    admission: new Map(), degree: new Map(), gender: new Map(),
+    section: new Map(), selection: new Map(), nativeProvince: new Map()
   };
+  const tagCount = { dorm: new Map(), extra: new Map() };
   for (const it of bankAll){
     const n = it._n; if (!n) continue;
+    for (const tk in tagCount) for (const tg of n[tk]) tagCount[tk].set(tg, (tagCount[tk].get(tg) || 0) + 1);
     for (const k in maps){
       const key = n[k]; if (!key) continue;
       if (!maps[k].has(key)) maps[k].set(key, { count: 0, originals: new Map() });
@@ -1426,6 +1576,8 @@ function computeUniqueValues(){
       return { norm, label, count: info.count };
     }).sort((a, b) => a.label.localeCompare(b.label, 'fa'));
   }
+  bankUniqueValues.dorm = DORM_ORDER.filter(t => tagCount.dorm.has(t)).map(t => ({ norm: t, label: DORM_TAGS[t].label, count: tagCount.dorm.get(t) }));
+  bankUniqueValues.extra = EXTRA_ORDER.filter(t => tagCount.extra.has(t)).map(t => ({ norm: t, label: EXTRA_TAGS[t].label, count: tagCount.extra.get(t) }));
 }
 function updateBankBadge(){
   document.getElementById('bank-badge').textContent = toFa(bankAll.length);
@@ -1460,9 +1612,10 @@ function renderBank(){
   if (!filtersCollapseInit){ filtersCollapseInit = true; if (window.innerWidth <= 700) applyFiltersCollapse(false); else applyFiltersCollapse(true); }
   applyFilters(true);
 }
-const MSEL_KEYS = ['province', 'university', 'major', 'admission', 'degree', 'gender'];
+const MSEL_KEYS = ['province', 'university', 'major', 'admission', 'degree', 'gender', 'dorm', 'extra', 'selection', 'section', 'nativeProvince'];
 const MSEL_TITLES = { province: 'استان', university: 'دانشگاه', major: 'عنوان رشته',
-  admission: 'نحوه پذیرش', degree: 'دوره تحصیلی', gender: 'جنس پذیرش' };
+  admission: 'نحوه پذیرش', degree: 'دوره تحصیلی', gender: 'جنس پذیرش', dorm: 'وضعیت خوابگاه', extra: 'شرایط خاص',
+  selection: 'نوع گزینش', section: 'بخش دفترچه', nativeProvince: 'استان بومی' };
 const mselQuery = {};
 
 function labelFromNorm(key, norm){
@@ -1610,6 +1763,11 @@ function applyFilters(keepPage){
     if (S.admission && !S.admission.has(n.admission)) return false;
     if (S.degree && !S.degree.has(n.degree)) return false;
     if (S.gender && !S.gender.has(n.gender)) return false;
+    if (S.selection && !S.selection.has(n.selection)) return false;
+    if (S.section && !S.section.has(n.section)) return false;
+    if (S.nativeProvince && !S.nativeProvince.has(n.nativeProvince)) return false;
+    if (S.dorm && !n.dorm.some(t => S.dorm.has(t))) return false;
+    if (S.extra && !n.extra.some(t => S.extra.has(t))) return false;
     if (f.sleep === 'with_problem' && !n.sleepProblem) return false;
     if (f.sleep === 'without_problem' && n.sleepProblem) return false;
     if (f.listed === 'in' && !listedCodes.has(it.code)) return false;
@@ -1693,30 +1851,34 @@ function renderBankTable(){
     <th style="width:70px">استان</th>
     <th style="width:70px">نحوه</th>
     <th style="width:70px">دوره</th>
+    <th style="width:66px">گزینش</th>
     <th style="width:60px">جنس</th>
     <th style="width:55px">ظرفیت</th>
   </tr></thead><tbody>`;
   for (const it of rows){
     const listed = listedCodes.has(it.code);
     const sel = !listed && bankSelected.has(it.code);
-    const problem = it._n && it._n.sleepProblem;
-    const hasNotes = !!it.notes;
-    const rowClass = (sel ? 'selected-row ' : '') + (problem ? 'sleep-warning ' : '') + (listed ? 'in-list' : '');
+    const nativeLine = nativeInfo(it);
+    const dchips = dormChipsFromTags(it._n && it._n.dorm);
+    const hasNotes = !!(it.notes || nativeLine || dchips);
+    const sev = it._n && it._n.dormSev;
+    const rowClass = (sel ? 'selected-row ' : '') + (sev === 'bad' ? 'sleep-warning ' : sev === 'warn' ? 'sleep-amber ' : '') + (listed ? 'in-list' : '');
     html += `<tr class="data-row ${rowClass} ${hasNotes ? 'has-notes' : ''}" data-code="${escapeHtml(it.code)}">
       <td class="check-cell"><input type="checkbox" data-check="${escapeHtml(it.code)}" class="${listed ? 'listed-cb' : ''}" ${(sel || listed) ? 'checked' : ''} ${listed ? 'title="در لیست مقایسه هست"' : ''}></td>
       <td class="code-cell">${escapeHtml(it.code)}${listed ? '<span class="listed-badge">✓ در لیست</span>' : ''}</td>
       <td class="major-cell">${escapeHtml(it.major)}</td>
-      <td class="uni-cell">${escapeHtml(it.university)}</td>
+      <td class="uni-cell">${escapeHtml(it.university)}${it.section && it.section !== SECTION_MAIN ? `<div class="sub">${escapeHtml(sectionShort(it.section))}</div>` : ''}</td>
       <td class="small c-prov">${escapeHtml(it.province)}</td>
       <td class="small c-adm">${escapeHtml(it.admission)}</td>
       <td class="small c-deg">${escapeHtml(it.degree)}</td>
+      <td class="small c-sel">${selChip(it.selection)}</td>
       <td class="small c-gen">${escapeHtml(it.gender)}</td>
       <td class="small c-cap">${escapeHtml(capDisplay(it))}</td>
-      <td class="meta-cell">${[it.province, it.admission, it.degree, it.gender, capDisplay(it) ? 'ظرفیت: ' + capDisplay(it) : '']
+      <td class="meta-cell">${selChip(it.selection)}${it.section && it.section !== SECTION_MAIN ? `<span class="mc">${escapeHtml(sectionShort(it.section))}</span>` : ''}${[it.province, it.admission, it.degree, it.gender, capDisplay(it) ? 'ظرفیت: ' + capDisplay(it) : '']
         .filter(Boolean).map(t => `<span class="mc">${escapeHtml(t)}</span>`).join('')}</td>
     </tr>`;
     if (hasNotes){
-      html += `<tr class="notes-row ${rowClass}"><td></td><td colspan="8"><div class="nt">${problem ? '<span class="sleep-badge">🚫 خوابگاه</span> ' : '📝 '}${escapeHtml(it.notes)}</div></td></tr>`;
+      html += `<tr class="notes-row ${rowClass}"><td></td><td colspan="9"><div class="nt">${dchips}${nativeLine ? `<div class="nat">🎯 ${nativeLine}</div>` : ''}${it.notes ? `<div>📝 ${escapeHtml(it.notes)}</div>` : ''}</div></td></tr>`;
     }
   }
   html += '</tbody>';
@@ -1817,7 +1979,7 @@ document.getElementById('f-major-contains').addEventListener('change', e => {
 });
 document.getElementById('clear-filters-btn').addEventListener('click', () => {
   if (false) return;
-  bankFilters = { search: '', province: [], university: [], major: [], admission: [], degree: [], gender: [], sleep: '', listed: '' };
+  bankFilters = { search: '', province: [], university: [], major: [], admission: [], degree: [], gender: [], dorm: [], extra: [], selection: [], section: [], nativeProvince: [], sleep: '', listed: '' };
   bankMajorContains = false;
   for (const k in mselQuery) mselQuery[k] = '';
   document.querySelectorAll('.msel-search').forEach(i => i.value = '');
@@ -1911,7 +2073,7 @@ function renderInput(){
   if (visible.length === 0){ list.innerHTML = '<div class="empty-state">موردی نیست.</div>'; return; }
   list.innerHTML = visible.map((it, idx) => {
     const mainText = it.text.replace(/ — 📝 .*$/, '');
-    const notesLine = it.notes ? `<span class="item-notes">${it.sleepProblem ? '🚫 ' : '📝 '}${escapeHtml(it.notes)}</span>` : '';
+    const notesLine = itemSelChip(it) + (it.notes ? `<span class="item-notes">${it.sleepProblem ? '🚫 ' : '📝 '}${escapeHtml(it.notes)}</span>` : '');
     return `<div class="item-row ${it.flag ? 'flagged-row' : ''}" data-id="${it.id}">
       <span class="item-index">${toFa(idx + 1)}</span>
       <div class="item-main">
@@ -2245,8 +2407,9 @@ function renderCompare(){
   posInfo.style.display = 'block';
   posInfo.innerHTML = `📍 در حال جای‌گذاری: <b>${escapeHtml(insertItem.text.slice(0, 80))}</b> | روش: <b>${s.strategy === 'binary' ? 'دودویی' : 'خطی'}</b>`;
   const notesHtml = (it) => {
-    if (!it.notes) return '';
-    return `<div class="notes-display">${it.sleepProblem ? '🚫 ' : '📝 '}${escapeHtml(it.notes)}</div>`;
+    const sc = itemSelChip(it);
+    if (!it.notes && !sc) return '';
+    return `<div class="notes-display">${sc} ${it.notes ? (it.sleepProblem ? '🚫 ' : '📝 ') + escapeHtml(it.notes) : ''}</div>`;
   };
   area.innerHTML = `
     <div class="tap-hint">روی رشته‌ای که ترجیح می‌دهی بزن</div>
@@ -2392,7 +2555,7 @@ function renderResult(){
     const it = items.find(i => i.id === id);
     if (!it) continue;
     const mainText = it.text.replace(/ — 📝 .*$/, '');
-    const notesLine = it.notes ? `<span class="item-notes">${it.sleepProblem ? '🚫 ' : '📝 '}${escapeHtml(it.notes)}</span>` : '';
+    const notesLine = itemSelChip(it) + (it.notes ? `<span class="item-notes">${it.sleepProblem ? '🚫 ' : '📝 '}${escapeHtml(it.notes)}</span>` : '');
     const selected = resultSelected.has(id);
     html += `
       <div class="result-item ${it.flag ? 'flagged-row' : ''} ${selected ? 'selected' : ''}" data-id="${id}">
@@ -2716,7 +2879,7 @@ function isBankFile(d){
 function cleanBankRecord(r){
   const o = {}; for (const k in r){ if (k !== '_n') o[k] = r[k]; }
   o.code = String(o.code ?? '').trim();
-  for (const k of ['major','university','province','admission','degree','gender','notes','capFirst','capSecond','capFemale','capMale','page','blockRaw'])
+  for (const k of ['major','university','province','admission','degree','gender','notes','capFirst','capSecond','capFemale','capMale','page','blockRaw','section','selection','nativeProvince','domain','service'])
     o[k] = o[k] == null ? '' : String(o[k]);
   o.star = o.star === true || o.star === 1 || o.star === '1' || o.star === 'true' || o.star === 'بله';
   return o;
@@ -2992,19 +3155,21 @@ function lookupFields(r){
   }
   f.push(['جنس پذیرش', r.gender]);
   f.push(['ظرفیت', lookupCapText(r)]);
-  if (!isN && r.notes) f.push(['توضیحات', r.notes, true]);
+  if (r.selection) f.push(['نوع گزینش (دوره‌های روزانه)', r.selection]);
+  if (r.section && r.section !== SECTION_MAIN) f.push(['بخش دفترچه', r.section, true]);
+  if (r.notes) f.push(['توضیحات', r.notes, true]);
   if (r.star) f.push(['ستاره‌دار (*)', STAR_NOTE, true]);
   f.push(['صفحه دفترچه', r.page ? toFa(r.page) : '']);
   return f.filter(x => x[1]);
 }
 function lookupCardHtml(r){
-  const sleep = hasSleepProblem(r.notes);
+  const cls = classifyNotes(r.notes);
   let h = `<div class="lk-card"><div class="lk-head">
     <span class="lk-code">${escapeHtml(r.code)}</span><span class="lk-major">${escapeHtml(r.major)}</span>
     ${r.src === 'native' ? '<span class="lk-tag native">مخصوص بومی</span>' : ''}
     ${r.star ? '<span class="lk-tag star">⭐ ستاره‌دار</span>' : ''}
-    ${sleep ? '<span class="sleep-badge">🚫 مشکل خوابگاه</span>' : ''}
-  </div><div class="lk-grid">`;
+  </div>
+  <div class="lk-chips">${selChip(r.selection)}${dormChipsFromTags(cls.dorm)}</div><div class="lk-grid">`;
   for (const [label, val, wide] of lookupFields(r).slice(2)){
     h += `<div class="lk-row ${wide ? 'wide' : ''}"><div class="lk-label">${label}</div><div class="lk-val">${escapeHtml(val)}</div></div>`;
   }
@@ -3045,7 +3210,7 @@ function lookupRefreshMeta(){
   if (!bankAll.length){ el.textContent = 'بانکی بارگذاری نشده است.'; return; }
   const nNat = bankAll.filter(r => r.src === 'native').length;
   el.innerHTML = `جستجو در بانک فعال: <b>${toFa(bankAll.length)}</b> ردیف` +
-    (nNat ? ` (${toFa(bankAll.length - nNat)} جدول اصلی + ${toFa(nNat)} مخصوص بومی)` : '');
+    (nNat ? ` — شامل ${toFa(nNat)} ردیف مخصوص بومی` : '');
 }
 function lookupAddToCompare(code){
   const it = lookupGet(code); if (!it) return;
